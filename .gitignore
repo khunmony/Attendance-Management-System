@@ -1,0 +1,44 @@
+# =========================================================================
+# Windows System Files
+# =========================================================================
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# =========================================================================
+# VS Code (Visual Studio Code)
+# =========================================================================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
+.history/
+*.code-workspace
+
+# =========================================================================
+# Environments, Secrets & Credentials (NEVER commit these)
+# =========================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.json
+!package.json
+!composer.json
+!manifest.json
+
+# =========================================================================
+# Common Logs & Diagnostics
+# =========================================================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
