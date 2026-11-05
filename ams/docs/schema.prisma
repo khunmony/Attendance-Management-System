@@ -1,0 +1,387 @@
+// School Attendance Management System (AMS) - Prisma schema (PostgreSQL)
+// Roles: ADMIN, TEACHER, STUDENT. Attendance is recorded per class session.
+// A school that takes daily attendance simply has one homeroom session per day.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  EXCUSED
+  LEFT_EARLY
+}
+
+enum MarkMethod {
+  TEACHER // teacher marked the roll
+  QR // student scanned the session QR
+  GEOFENCE // student checked in within the school radius
+  ADMIN_OVERRIDE
+}
+
+enum SessionStatus {
+  SCHEDULED
+  OPEN // attendance being taken
+  CLOSED // attendance finalized
+  CANCELLED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  WITHDRAWN
+  GRADUATED
+}
+
+enum ExcuseReason {
+  SICK
+  FAMILY
+  APPOINTMENT
+  OTHER
+}
+
+enum ExcuseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum NotificationType {
+  EXCUSE_SUBMITTED
+  EXCUSE_APPROVED
+  EXCUSE_REJECTED
+  MARKED_ABSENT
+  LOW_ATTENDANCE
+  ATTENDANCE_OVERRIDDEN
+  SYSTEM
+}
+
+// ───────────────────────── Users & Auth ─────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  code         String   @unique // student ID or staff ID
+  email        String   @unique
+  passwordHash String // bcrypt
+  firstName    String
+  lastName     String
+  role         Role
+  isActive     Boolean  @default(true)
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Teacher side
+  homeroomClasses Class[]        @relation("HomeroomTeacher")
+  courses         Course[]       @relation("CourseTeacher")
+  sessions        ClassSession[] @relation("SessionTeacher")
+  markedRecords   AttendanceRecord[] @relation("RecordMarker")
+  reviewedExcuses AbsenceExcuse[]    @relation("ExcuseReviewer")
+
+  // Student side
+  enrollments Enrollment[]
+  records     AttendanceRecord[] @relation("RecordStudent")
+  excuses     AbsenceExcuse[]    @relation("ExcuseStudent")
+
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+
+  @@index([role])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ───────────────────────── Academic structure ─────────────────────────
+
+model AcademicYear {
+  id        String   @id @default(cuid())
+  name      String   @unique // "2026-2027"
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  terms     Term[]
+  classes   Class[]
+
+  @@map("academic_years")
+}
+
+model Term {
+  id             String       @id @default(cuid())
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  name           String // "Term 1"
+  startDate      DateTime     @db.Date
+  endDate        DateTime     @db.Date
+
+  @@unique([academicYearId, name])
+  @@map("terms")
+}
+
+model Class {
+  id                String       @id @default(cuid())
+  academicYearId    String
+  academicYear      AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  name              String // "Grade 10-A"
+  gradeLevel        Int?
+  homeroomTeacherId String?
+  homeroomTeacher   User?        @relation("HomeroomTeacher", fields: [homeroomTeacherId], references: [id], onDelete: SetNull)
+
+  enrollments Enrollment[]
+  courses     Course[]
+  sessions    ClassSession[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([academicYearId, name])
+  @@index([homeroomTeacherId])
+  @@map("classes")
+}
+
+model Enrollment {
+  id         String           @id @default(cuid())
+  studentId  String
+  student    User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classId    String
+  class      Class            @relation(fields: [classId], references: [id], onDelete: Cascade)
+  status     EnrollmentStatus @default(ACTIVE)
+  enrolledAt DateTime         @default(now())
+  leftAt     DateTime?
+
+  @@unique([studentId, classId])
+  @@index([classId, status])
+  @@map("enrollments")
+}
+
+model Subject {
+  id      String   @id @default(cuid())
+  name    String   @unique
+  code    String   @unique
+  courses Course[]
+
+  @@map("subjects")
+}
+
+// A subject taught to a class by a teacher
+model Course {
+  id        String         @id @default(cuid())
+  classId   String
+  class     Class          @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacherId String
+  teacher   User           @relation("CourseTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  slots     ScheduleSlot[]
+  sessions  ClassSession[]
+
+  @@unique([classId, subjectId])
+  @@index([teacherId])
+  @@map("courses")
+}
+
+// Weekly recurring timetable entry; sessions are generated from these
+model ScheduleSlot {
+  id        String @id @default(cuid())
+  courseId  String
+  course    Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  dayOfWeek Int // 0=Sun ... 6=Sat
+  startTime String // "HH:mm"
+  endTime   String // "HH:mm"
+
+  @@unique([courseId, dayOfWeek, startTime])
+  @@map("schedule_slots")
+}
+
+model Holiday {
+  id          String   @id @default(cuid())
+  name        String
+  date        DateTime @db.Date
+  isRecurring Boolean  @default(false)
+
+  @@unique([date, name])
+  @@map("holidays")
+}
+
+// ───────────────────────── Attendance ─────────────────────────
+
+// One concrete class meeting. courseId is null for a daily homeroom session.
+model ClassSession {
+  id        String        @id @default(cuid())
+  classId   String
+  class     Class         @relation(fields: [classId], references: [id], onDelete: Cascade)
+  courseId  String?
+  course    Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  teacherId String
+  teacher   User          @relation("SessionTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  date      DateTime      @db.Date
+  startTime String // "HH:mm"
+  endTime   String // "HH:mm"
+  status    SessionStatus @default(SCHEDULED)
+  closedAt  DateTime?
+
+  records  AttendanceRecord[]
+  qrTokens QrToken[]
+
+  @@unique([classId, courseId, date, startTime])
+  @@index([date])
+  @@index([teacherId, date])
+  @@map("class_sessions")
+}
+
+model AttendanceRecord {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId String
+  student   User         @relation("RecordStudent", fields: [studentId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date // denormalized from the session for fast reports
+
+  status      AttendanceStatus @default(ABSENT)
+  method      MarkMethod       @default(TEACHER)
+  checkInAt   DateTime?
+  lateMinutes Int              @default(0)
+  note        String?
+
+  markedById String?
+  markedBy   User?   @relation("RecordMarker", fields: [markedById], references: [id], onDelete: SetNull)
+
+  // Admin/teacher correction after the fact
+  isOverridden   Boolean   @default(false)
+  overrideReason String?
+  overriddenAt   DateTime?
+
+  excuseId String?
+  excuse   AbsenceExcuse? @relation(fields: [excuseId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sessionId, studentId])
+  @@index([studentId, date])
+  @@index([date, status])
+  @@map("attendance_records")
+}
+
+// Short-lived token the teacher displays as a QR code for one session
+model QrToken {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tokenHash String       @unique
+  expiresAt DateTime
+  createdAt DateTime     @default(now())
+
+  @@index([expiresAt])
+  @@map("qr_tokens")
+}
+
+model SchoolLocation {
+  id           String  @id @default(cuid())
+  name         String
+  latitude     Float
+  longitude    Float
+  radiusMeters Int     @default(150)
+  isActive     Boolean @default(true)
+
+  @@map("school_locations")
+}
+
+// Singleton row (id = 1) holding the attendance rules
+model SchoolSetting {
+  id                   Int    @id @default(1)
+  timezone             String @default("Asia/Phnom_Penh")
+  lateAfterMinutes     Int    @default(10) // arriving later than this => LATE
+  absentAfterMinutes   Int    @default(30) // arriving later than this => ABSENT
+  lowAttendancePercent Int    @default(80) // flag students below this rate
+
+  @@map("school_settings")
+}
+
+// ───────────────────────── Absence excuses ─────────────────────────
+
+model AbsenceExcuse {
+  id            String       @id @default(cuid())
+  studentId     String
+  student       User         @relation("ExcuseStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  startDate     DateTime     @db.Date
+  endDate       DateTime     @db.Date
+  reason        ExcuseReason
+  details       String?
+  attachmentUrl String?
+  status        ExcuseStatus @default(PENDING)
+
+  reviewedById  String?
+  reviewedBy    User?     @relation("ExcuseReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt    DateTime?
+  reviewComment String?
+
+  records AttendanceRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([studentId, status])
+  @@index([startDate, endDate])
+  @@map("absence_excuses")
+}
+
+// ───────────────────────── Notifications & Audit ─────────────────────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String // e.g. "ATTENDANCE_OVERRIDE"
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}

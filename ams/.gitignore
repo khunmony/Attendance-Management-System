@@ -1,0 +1,27 @@
+# Secrets - never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.dump
+
+# Uploads / exports that could contain student data
+uploads/
+exports/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
